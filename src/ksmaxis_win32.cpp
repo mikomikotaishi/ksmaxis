@@ -40,6 +40,7 @@ namespace ksmaxis
 		LPDIRECTINPUT8W s_directInput = nullptr;
 		std::vector<Device> s_devices;
 		bool s_initialized = false;
+		bool s_firstUpdate = true;
 		AxisValues s_deltaAnalogStick = { 0.0, 0.0 };
 		AxisValues s_deltaSlider = { 0.0, 0.0 };
 
@@ -158,6 +159,7 @@ namespace ksmaxis
 			dev.opened = true;
 		}
 
+		s_firstUpdate = true;
 		return Error::kOk;
 	}
 
@@ -223,16 +225,21 @@ namespace ksmaxis
 			dev.slider0 = Normalize(js.rglSlider[0]);
 			dev.slider1 = Normalize(js.rglSlider[1]);
 
-			s_deltaAnalogStick[0] += CalculateDelta(dev.axisX, dev.prevAxisX);
-			s_deltaAnalogStick[1] += CalculateDelta(dev.axisY, dev.prevAxisY);
-			s_deltaSlider[0] += CalculateDelta(dev.slider0, dev.prevSlider0);
-			s_deltaSlider[1] += CalculateDelta(dev.slider1, dev.prevSlider1);
+			if (!s_firstUpdate)
+			{
+				s_deltaAnalogStick[0] += CalculateDelta(dev.axisX, dev.prevAxisX);
+				s_deltaAnalogStick[1] += CalculateDelta(dev.axisY, dev.prevAxisY);
+				s_deltaSlider[0] += CalculateDelta(dev.slider0, dev.prevSlider0);
+				s_deltaSlider[1] += CalculateDelta(dev.slider1, dev.prevSlider1);
+			}
 
 			dev.prevAxisX = dev.axisX;
 			dev.prevAxisY = dev.axisY;
 			dev.prevSlider0 = dev.slider0;
 			dev.prevSlider1 = dev.slider1;
 		}
+
+		s_firstUpdate = false;
 	}
 
 	AxisValues GetAxisDeltas(InputMode mode)
