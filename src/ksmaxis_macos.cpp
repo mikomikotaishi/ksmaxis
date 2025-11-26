@@ -157,17 +157,25 @@ namespace ksmaxis
 		}
 	}
 
-	Error Init()
+	bool Init(std::string* pErrorString)
 	{
 		if (s_initialized)
 		{
-			return Error::kAlreadyInitialized;
+			if (pErrorString)
+			{
+				*pErrorString = "Already initialized";
+			}
+			return false;
 		}
 
 		s_hidManager = IOHIDManagerCreate(kCFAllocatorDefault, kIOHIDOptionsTypeNone);
 		if (!s_hidManager)
 		{
-			return Error::kPlatform;
+			if (pErrorString)
+			{
+				*pErrorString = "IOHIDManagerCreate failed";
+			}
+			return false;
 		}
 
 		std::int32_t usagePage = kHIDPage_GenericDesktop;
@@ -207,17 +215,13 @@ namespace ksmaxis
 		IOReturn openResult = IOHIDManagerOpen(s_hidManager, kIOHIDOptionsTypeNone);
 		if (openResult != kIOReturnSuccess && openResult != kIOReturnExclusiveAccess)
 		{
-			std::fprintf(stderr, "[ksmaxis warning] IOHIDManagerOpen failed: 0x%08X (%s)\n",
-				openResult, GetIOReturnErrorString(openResult));
+			if (pErrorString)
+			{
+				*pErrorString = GetIOReturnErrorString(openResult);
+			}
 			CFRelease(s_hidManager);
 			s_hidManager = nullptr;
-			return Error::kPlatform;
-		}
-
-		if (openResult == kIOReturnExclusiveAccess)
-		{
-			std::fprintf(stderr, "[ksmaxis warning] IOHIDManagerOpen: 0x%08X (%s)\n",
-				openResult, GetIOReturnErrorString(openResult));
+			return false;
 		}
 
 		for (int i = 0; i < 10; ++i)
@@ -227,7 +231,7 @@ namespace ksmaxis
 
 		s_initialized = true;
 		s_firstUpdate = true;
-		return Error::kOk;
+		return true;
 	}
 
 	void Terminate()

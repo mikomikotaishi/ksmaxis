@@ -1,6 +1,7 @@
 ﻿#pragma once
 #include <cstdint>
 #include <array>
+#include <string>
 
 namespace ksmaxis
 {
@@ -10,18 +11,9 @@ namespace ksmaxis
 		kSlider, // Slider0/Slider1
 	};
 
-	enum class Error : std::uint8_t
-	{
-		kOk,
-		kNotInitialized,
-		kAlreadyInitialized,
-		kPlatform,
-	};
-
 	using AxisValues = std::array<double, 2>;
 
-	[[nodiscard]]
-	Error Init();
+	bool Init(std::string* pErrorString = nullptr);
 
 	void Terminate();
 

@@ -11,6 +11,7 @@
 #include "ksmaxis/ksmaxis.hpp"
 
 #include <vector>
+#include <comdef.h>
 
 #pragma comment(lib, "dinput8.lib")
 #pragma comment(lib, "dxguid.lib")
@@ -74,13 +75,31 @@ namespace ksmaxis
 			s_devices.push_back(dev);
 			return DIENUM_CONTINUE;
 		}
+
+		std::string GetHResultErrorString(HRESULT hr)
+		{
+			_com_error err(hr);
+			const wchar_t* msg = err.ErrorMessage();
+			int size = WideCharToMultiByte(CP_UTF8, 0, msg, -1, nullptr, 0, nullptr, nullptr);
+			if (size <= 0)
+			{
+				return "Unknown error";
+			}
+			std::string result(size - 1, '\0');
+			WideCharToMultiByte(CP_UTF8, 0, msg, -1, &result[0], size, nullptr, nullptr);
+			return result;
+		}
 	}
 
-	Error Init()
+	bool Init(std::string* pErrorString)
 	{
 		if (s_initialized)
 		{
-			return Error::kAlreadyInitialized;
+			if (pErrorString)
+			{
+				*pErrorString = "Already initialized";
+			}
+			return false;
 		}
 
 		HRESULT hr = DirectInput8Create(
@@ -93,7 +112,11 @@ namespace ksmaxis
 
 		if (FAILED(hr))
 		{
-			return Error::kPlatform;
+			if (pErrorString)
+			{
+				*pErrorString = GetHResultErrorString(hr);
+			}
+			return false;
 		}
 
 		hr = s_directInput->EnumDevices(
@@ -107,7 +130,11 @@ namespace ksmaxis
 		{
 			s_directInput->Release();
 			s_directInput = nullptr;
-			return Error::kPlatform;
+			if (pErrorString)
+			{
+				*pErrorString = GetHResultErrorString(hr);
+			}
+			return false;
 		}
 
 		s_initialized = true;
@@ -162,7 +189,7 @@ namespace ksmaxis
 		}
 
 		s_firstUpdate = true;
-		return Error::kOk;
+		return true;
 	}
 
 	void Terminate()

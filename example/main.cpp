@@ -22,10 +22,10 @@ int main()
 		ksmaxis::Terminate();
 	});
 
-	auto err = ksmaxis::Init();
-	if (err != ksmaxis::Error::kOk)
+	std::string errorString;
+	if (!ksmaxis::Init(&errorString))
 	{
-		std::cerr << "Init failed" << std::endl;
+		std::cerr << "Init failed: " << errorString << std::endl;
 		return 1;
 	}
 

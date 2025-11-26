@@ -198,11 +198,15 @@ namespace ksmaxis
 		}
 	}
 
-	Error Init()
+	bool Init(std::string* pErrorString)
 	{
 		if (s_initialized)
 		{
-			return Error::kAlreadyInitialized;
+			if (pErrorString)
+			{
+				*pErrorString = "Already initialized";
+			}
+			return false;
 		}
 
 		s_initialized = true;
@@ -210,7 +214,7 @@ namespace ksmaxis
 		s_lastScanTime = std::chrono::steady_clock::now();
 		ScanDevices();
 
-		return Error::kOk;
+		return true;
 	}
 
 	void Terminate()
