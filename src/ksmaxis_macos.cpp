@@ -283,8 +283,7 @@ namespace ksmaxis
 				CFMutableDictionaryRef matchDict = CFDictionaryCreateMutable(
 					kCFAllocatorDefault, 0,
 					&kCFTypeDictionaryKeyCallBacks,
-					&kCFTypeDictionaryValueCallBacks
-				);
+					&kCFTypeDictionaryValueCallBacks);
 				CFNumberRef pageRef = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &usagePage);
 				CFNumberRef usageRef = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &usage);
 				CFDictionarySetValue(matchDict, CFSTR(kIOHIDDeviceUsagePageKey), pageRef);
@@ -333,8 +332,7 @@ namespace ksmaxis
 			CFMutableDictionaryRef mouseMatchDict = CFDictionaryCreateMutable(
 				kCFAllocatorDefault, 0,
 				&kCFTypeDictionaryKeyCallBacks,
-				&kCFTypeDictionaryValueCallBacks
-			);
+				&kCFTypeDictionaryValueCallBacks);
 			CFNumberRef mousePageRef = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &mouseUsagePage);
 			CFNumberRef mouseUsageRef = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &mouseUsage);
 			CFDictionarySetValue(mouseMatchDict, CFSTR(kIOHIDDeviceUsagePageKey), mousePageRef);
@@ -441,7 +439,10 @@ namespace ksmaxis
 		{
 			return s_deltaMouse;
 		}
-		return s_deltaSlider;
+		else
+		{
+			return s_deltaSlider;
+		}
 	}
 }
 

@@ -492,7 +492,10 @@ namespace ksmaxis
 		{
 			return s_deltaMouse;
 		}
-		return s_deltaSlider;
+		else
+		{
+			return s_deltaSlider;
+		}
 	}
 }
 

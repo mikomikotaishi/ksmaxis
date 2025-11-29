@@ -160,8 +160,7 @@ namespace ksmaxis
 				HWND_MESSAGE,
 				nullptr,
 				GetModuleHandle(nullptr),
-				nullptr
-			);
+				nullptr);
 
 			if (!s_hiddenWnd)
 			{
@@ -227,8 +226,7 @@ namespace ksmaxis
 			DIRECTINPUT_VERSION,
 			IID_IDirectInput8W,
 			reinterpret_cast<void**>(&s_directInput),
-			nullptr
-		);
+			nullptr);
 
 		if (FAILED(hr))
 		{
@@ -245,8 +243,7 @@ namespace ksmaxis
 				DI8DEVCLASS_GAMECTRL,
 				EnumDevicesCallback,
 				nullptr,
-				DIEDFL_ATTACHEDONLY
-			);
+				DIEDFL_ATTACHEDONLY);
 
 			if (FAILED(hr))
 			{
@@ -431,7 +428,10 @@ namespace ksmaxis
 		{
 			return s_deltaMouse;
 		}
-		return s_deltaSlider;
+		else
+		{
+			return s_deltaSlider;
+		}
 	}
 }
 
