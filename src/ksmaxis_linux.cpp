@@ -31,7 +31,7 @@ namespace ksmaxis
 			bool available = false;
 		};
 
-		struct Device
+		struct JoystickDevice
 		{
 			std::string path;
 			int fd = -1;
@@ -56,7 +56,7 @@ namespace ksmaxis
 			bool opened = false;
 		};
 
-		std::vector<Device> s_devices;
+		std::vector<JoystickDevice> s_joystickDevices;
 		std::vector<MouseDevice> s_mouseDevices;
 		bool s_initialized = false;
 		bool s_firstUpdate = true;
@@ -65,7 +65,7 @@ namespace ksmaxis
 		AxisValues s_deltaMouse = { 0.0, 0.0 };
 		std::chrono::steady_clock::time_point s_lastScanTime;
 
-		double Normalize(const Device& dev, std::int32_t code, std::int32_t value)
+		double Normalize(const JoystickDevice& dev, std::int32_t code, std::int32_t value)
 		{
 			if (code < 0 || code >= ABS_CNT || !dev.ranges[code].available)
 			{
@@ -101,9 +101,9 @@ namespace ksmaxis
 			return delta;
 		}
 
-		bool IsDeviceAlreadyOpened(const std::string& path)
+		bool IsJoystickDeviceAlreadyOpened(const std::string& path)
 		{
-			for (const auto& dev : s_devices)
+			for (const auto& dev : s_joystickDevices)
 			{
 				if (dev.path == path)
 				{
@@ -125,9 +125,9 @@ namespace ksmaxis
 			return false;
 		}
 
-		void RemoveDisconnectedDevices()
+		void RemoveDisconnectedJoystickDevices()
 		{
-			for (auto it = s_devices.begin(); it != s_devices.end();)
+			for (auto it = s_joystickDevices.begin(); it != s_joystickDevices.end();)
 			{
 				if (!it->opened || it->fd < 0)
 				{
@@ -139,7 +139,7 @@ namespace ksmaxis
 				if (ioctl(it->fd, EVIOCGID, &id) < 0)
 				{
 					close(it->fd);
-					it = s_devices.erase(it);
+					it = s_joystickDevices.erase(it);
 				}
 				else
 				{
@@ -171,7 +171,7 @@ namespace ksmaxis
 			}
 		}
 
-		void ScanDevices()
+		void ScanJoystickDevices()
 		{
 			DIR* dir = opendir("/dev/input");
 			if (!dir)
@@ -190,7 +190,7 @@ namespace ksmaxis
 				std::string path = "/dev/input/" + std::string{ entry->d_name };
 
 				// Skip if already opened
-				if (IsDeviceAlreadyOpened(path))
+				if (IsJoystickDeviceAlreadyOpened(path))
 				{
 					continue;
 				}
@@ -215,7 +215,7 @@ namespace ksmaxis
 					continue;
 				}
 
-				Device dev{};
+				JoystickDevice dev{};
 				dev.path = path;
 				dev.fd = fd;
 
@@ -238,7 +238,7 @@ namespace ksmaxis
 				}
 
 				dev.opened = true;
-				s_devices.push_back(std::move(dev));
+				s_joystickDevices.push_back(std::move(dev));
 			}
 
 			closedir(dir);
@@ -264,7 +264,7 @@ namespace ksmaxis
 				std::string path = "/dev/input/" + std::string{ entry->d_name };
 
 				// Skip if already opened as joystick
-				if (IsDeviceAlreadyOpened(path))
+				if (IsJoystickDeviceAlreadyOpened(path))
 				{
 					continue;
 				}
@@ -342,7 +342,7 @@ namespace ksmaxis
 		s_initialized = true;
 		s_firstUpdate = true;
 		s_lastScanTime = std::chrono::steady_clock::now();
-		ScanDevices();
+		ScanJoystickDevices();
 		ScanMouseDevices(pWarningStrings);
 
 		return true;
@@ -350,7 +350,7 @@ namespace ksmaxis
 
 	void Terminate()
 	{
-		for (auto& dev : s_devices)
+		for (auto& dev : s_joystickDevices)
 		{
 			if (dev.fd >= 0)
 			{
@@ -358,7 +358,7 @@ namespace ksmaxis
 				dev.fd = -1;
 			}
 		}
-		s_devices.clear();
+		s_joystickDevices.clear();
 
 		for (auto& dev : s_mouseDevices)
 		{
@@ -388,14 +388,14 @@ namespace ksmaxis
 		auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - s_lastScanTime);
 		if (elapsed.count() >= 1000)
 		{
-			RemoveDisconnectedDevices();
+			RemoveDisconnectedJoystickDevices();
 			RemoveDisconnectedMouseDevices();
-			ScanDevices();
+			ScanJoystickDevices();
 			ScanMouseDevices();
 			s_lastScanTime = now;
 		}
 
-		for (auto& dev : s_devices)
+		for (auto& dev : s_joystickDevices)
 		{
 			if (!dev.opened || dev.fd < 0)
 			{

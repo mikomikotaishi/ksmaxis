@@ -19,13 +19,11 @@ namespace ksmaxis
 		constexpr std::uint32_t kUsageSlider = 0x36;
 		constexpr std::uint32_t kUsageDial = 0x37;
 
-		// Mouse-specific usages
-		constexpr std::uint32_t kUsagePageButton = 0x09;
-
-		// Wrap-around detection threshold (half of normalized range)
 		constexpr double kWrapThreshold = 0.5;
+		constexpr double kDeviceMatchingWaitSec = 0.1;
+		constexpr double kRunLoopIntervalSec = 0.01;
 
-		struct Device
+		struct JoystickDevice
 		{
 			IOHIDDeviceRef device = nullptr;
 			char productName[256] = {};
@@ -47,9 +45,9 @@ namespace ksmaxis
 			double deltaY = 0.0;
 		};
 
-		IOHIDManagerRef s_hidManager = nullptr;
+		IOHIDManagerRef s_joystickHidManager = nullptr;
 		IOHIDManagerRef s_mouseHidManager = nullptr;
-		std::vector<Device> s_devices;
+		std::vector<JoystickDevice> s_joystickDevices;
 		std::vector<MouseDevice> s_mouseDevices;
 		bool s_initialized = false;
 		bool s_firstUpdate = true;
@@ -86,9 +84,9 @@ namespace ksmaxis
 			return delta;
 		}
 
-		Device* FindDevice(IOHIDDeviceRef deviceRef)
+		JoystickDevice* FindJoystickDevice(IOHIDDeviceRef deviceRef)
 		{
-			for (auto& dev : s_devices)
+			for (auto& dev : s_joystickDevices)
 			{
 				if (dev.device == deviceRef) return &dev;
 			}
@@ -104,7 +102,7 @@ namespace ksmaxis
 			return nullptr;
 		}
 
-		void InputValueCallback(void* context, IOReturn result, void* sender, IOHIDValueRef valueRef)
+		void JoystickInputValueCallback(void* context, IOReturn result, void* sender, IOHIDValueRef valueRef)
 		{
 			if (!valueRef) return;
 
@@ -114,7 +112,7 @@ namespace ksmaxis
 			IOHIDDeviceRef deviceRef = IOHIDElementGetDevice(element);
 			if (!deviceRef) return;
 
-			Device* dev = FindDevice(deviceRef);
+			JoystickDevice* dev = FindJoystickDevice(deviceRef);
 			if (!dev) return;
 
 			std::uint32_t usagePage = IOHIDElementGetUsagePage(element);
@@ -143,12 +141,12 @@ namespace ksmaxis
 			}
 		}
 
-		void DeviceMatchedCallback(void* context, IOReturn result, void* sender, IOHIDDeviceRef deviceRef)
+		void JoystickDeviceMatchedCallback(void* context, IOReturn result, void* sender, IOHIDDeviceRef deviceRef)
 		{
 			if (!deviceRef) return;
-			if (FindDevice(deviceRef)) return;
+			if (FindJoystickDevice(deviceRef)) return;
 
-			Device dev{};
+			JoystickDevice dev{};
 			dev.device = deviceRef;
 
 			CFStringRef productRef = (CFStringRef)IOHIDDeviceGetProperty(deviceRef, CFSTR(kIOHIDProductKey));
@@ -161,19 +159,19 @@ namespace ksmaxis
 				snprintf(dev.productName, sizeof(dev.productName), "Unknown Device");
 			}
 
-			s_devices.push_back(dev);
+			s_joystickDevices.push_back(dev);
 
-			IOHIDDeviceRegisterInputValueCallback(deviceRef, InputValueCallback, nullptr);
+			IOHIDDeviceRegisterInputValueCallback(deviceRef, JoystickInputValueCallback, nullptr);
 			IOHIDDeviceScheduleWithRunLoop(deviceRef, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
 		}
 
-		void DeviceRemovedCallback(void* context, IOReturn result, void* sender, IOHIDDeviceRef deviceRef)
+		void JoystickDeviceRemovedCallback(void* context, IOReturn result, void* sender, IOHIDDeviceRef deviceRef)
 		{
-			for (auto it = s_devices.begin(); it != s_devices.end(); ++it)
+			for (auto it = s_joystickDevices.begin(); it != s_joystickDevices.end(); ++it)
 			{
 				if (it->device == deviceRef)
 				{
-					s_devices.erase(it);
+					s_joystickDevices.erase(it);
 					break;
 				}
 			}
@@ -258,65 +256,71 @@ namespace ksmaxis
 			return false;
 		}
 
-		s_hidManager = IOHIDManagerCreate(kCFAllocatorDefault, kIOHIDOptionsTypeNone);
-		if (!s_hidManager)
+		s_initialized = true;
+		s_firstUpdate = true;
+
+		// Initialize joystick HID manager (failure is non-fatal)
+		s_joystickHidManager = IOHIDManagerCreate(kCFAllocatorDefault, kIOHIDOptionsTypeNone);
+		if (!s_joystickHidManager)
 		{
-			if (pErrorString)
+			if (pWarningStrings)
 			{
-				*pErrorString = "IOHIDManagerCreate failed";
+				pWarningStrings->push_back("Joystick IOHIDManagerCreate failed");
 			}
-			return false;
 		}
-
-		std::int32_t usagePage = kHIDPage_GenericDesktop;
-		std::int32_t usages[] = {
-			kHIDUsage_GD_Joystick,
-			kHIDUsage_GD_GamePad,
-			kHIDUsage_GD_MultiAxisController
-		};
-
-		CFMutableArrayRef matchArray = CFArrayCreateMutable(kCFAllocatorDefault, 0, &kCFTypeArrayCallBacks);
-		for (std::int32_t usage : usages)
+		else
 		{
-			CFMutableDictionaryRef matchDict = CFDictionaryCreateMutable(
-				kCFAllocatorDefault, 0,
-				&kCFTypeDictionaryKeyCallBacks,
-				&kCFTypeDictionaryValueCallBacks
-			);
-			CFNumberRef pageRef = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &usagePage);
-			CFNumberRef usageRef = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &usage);
-			CFDictionarySetValue(matchDict, CFSTR(kIOHIDDeviceUsagePageKey), pageRef);
-			CFDictionarySetValue(matchDict, CFSTR(kIOHIDDeviceUsageKey), usageRef);
-			CFRelease(pageRef);
-			CFRelease(usageRef);
-			CFArrayAppendValue(matchArray, matchDict);
-			CFRelease(matchDict);
-		}
+			std::int32_t usagePage = kHIDPage_GenericDesktop;
+			std::int32_t usages[] = {
+				kHIDUsage_GD_Joystick,
+				kHIDUsage_GD_GamePad,
+				kHIDUsage_GD_MultiAxisController
+			};
 
-		IOHIDManagerSetDeviceMatchingMultiple(s_hidManager, matchArray);
-		CFRelease(matchArray);
-
-		IOHIDManagerRegisterDeviceMatchingCallback(s_hidManager, DeviceMatchedCallback, nullptr);
-		IOHIDManagerRegisterDeviceRemovalCallback(s_hidManager, DeviceRemovedCallback, nullptr);
-		IOHIDManagerRegisterInputValueCallback(s_hidManager, InputValueCallback, nullptr);
-
-		IOHIDManagerScheduleWithRunLoop(s_hidManager, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
-
-		IOReturn openResult = IOHIDManagerOpen(s_hidManager, kIOHIDOptionsTypeNone);
-		if (openResult != kIOReturnSuccess && openResult != kIOReturnExclusiveAccess)
-		{
-			if (pErrorString)
+			CFMutableArrayRef matchArray = CFArrayCreateMutable(kCFAllocatorDefault, 0, &kCFTypeArrayCallBacks);
+			for (std::int32_t usage : usages)
 			{
-				*pErrorString = GetIOReturnErrorString(openResult);
+				CFMutableDictionaryRef matchDict = CFDictionaryCreateMutable(
+					kCFAllocatorDefault, 0,
+					&kCFTypeDictionaryKeyCallBacks,
+					&kCFTypeDictionaryValueCallBacks
+				);
+				CFNumberRef pageRef = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &usagePage);
+				CFNumberRef usageRef = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &usage);
+				CFDictionarySetValue(matchDict, CFSTR(kIOHIDDeviceUsagePageKey), pageRef);
+				CFDictionarySetValue(matchDict, CFSTR(kIOHIDDeviceUsageKey), usageRef);
+				CFRelease(pageRef);
+				CFRelease(usageRef);
+				CFArrayAppendValue(matchArray, matchDict);
+				CFRelease(matchDict);
 			}
-			CFRelease(s_hidManager);
-			s_hidManager = nullptr;
-			return false;
-		}
 
-		for (int i = 0; i < 10; ++i)
-		{
-			CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.01, true);
+			IOHIDManagerSetDeviceMatchingMultiple(s_joystickHidManager, matchArray);
+			CFRelease(matchArray);
+
+			IOHIDManagerRegisterDeviceMatchingCallback(s_joystickHidManager, JoystickDeviceMatchedCallback, nullptr);
+			IOHIDManagerRegisterDeviceRemovalCallback(s_joystickHidManager, JoystickDeviceRemovedCallback, nullptr);
+			IOHIDManagerRegisterInputValueCallback(s_joystickHidManager, JoystickInputValueCallback, nullptr);
+
+			IOHIDManagerScheduleWithRunLoop(s_joystickHidManager, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
+
+			IOReturn openResult = IOHIDManagerOpen(s_joystickHidManager, kIOHIDOptionsTypeNone);
+			if (openResult != kIOReturnSuccess && openResult != kIOReturnExclusiveAccess)
+			{
+				if (pWarningStrings)
+				{
+					pWarningStrings->push_back(std::string{ "Joystick IOHIDManagerOpen failed: " } + GetIOReturnErrorString(openResult));
+				}
+				CFRelease(s_joystickHidManager);
+				s_joystickHidManager = nullptr;
+			}
+			else
+			{
+				for (double t = 0.0; t < kDeviceMatchingWaitSec; t += kRunLoopIntervalSec)
+				{
+					CFRunLoopRunInMode(kCFRunLoopDefaultMode, kRunLoopIntervalSec, true);
+				}
+			}
 		}
 
 		// Initialize mouse HID manager
@@ -357,26 +361,26 @@ namespace ksmaxis
 				CFRelease(s_mouseHidManager);
 				s_mouseHidManager = nullptr;
 			}
-
-			for (int i = 0; i < 10; ++i)
+			else
 			{
-				CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.01, true);
+				for (double t = 0.0; t < kDeviceMatchingWaitSec; t += kRunLoopIntervalSec)
+				{
+					CFRunLoopRunInMode(kCFRunLoopDefaultMode, kRunLoopIntervalSec, true);
+				}
 			}
 		}
 
-		s_initialized = true;
-		s_firstUpdate = true;
 		return true;
 	}
 
 	void Terminate()
 	{
-		if (s_hidManager)
+		if (s_joystickHidManager)
 		{
-			IOHIDManagerUnscheduleFromRunLoop(s_hidManager, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
-			IOHIDManagerClose(s_hidManager, kIOHIDOptionsTypeNone);
-			CFRelease(s_hidManager);
-			s_hidManager = nullptr;
+			IOHIDManagerUnscheduleFromRunLoop(s_joystickHidManager, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
+			IOHIDManagerClose(s_joystickHidManager, kIOHIDOptionsTypeNone);
+			CFRelease(s_joystickHidManager);
+			s_joystickHidManager = nullptr;
 		}
 		if (s_mouseHidManager)
 		{
@@ -385,7 +389,7 @@ namespace ksmaxis
 			CFRelease(s_mouseHidManager);
 			s_mouseHidManager = nullptr;
 		}
-		s_devices.clear();
+		s_joystickDevices.clear();
 		s_mouseDevices.clear();
 		s_initialized = false;
 	}
@@ -400,7 +404,7 @@ namespace ksmaxis
 
 		CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0, true);
 
-		for (auto& dev : s_devices)
+		for (auto& dev : s_joystickDevices)
 		{
 			if (!s_firstUpdate)
 			{

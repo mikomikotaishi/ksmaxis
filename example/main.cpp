@@ -37,11 +37,14 @@ int main()
 
 		auto stick = ksmaxis::GetAxisDeltas(ksmaxis::InputMode::kAnalogStick);
 		auto slider = ksmaxis::GetAxisDeltas(ksmaxis::InputMode::kSlider);
+		auto mouse = ksmaxis::GetAxisDeltas(ksmaxis::InputMode::kMouse);
 
 		std::cout << "\rStick: X=" << std::setw(6) << std::fixed << std::setprecision(2) << stick[0]
 		          << " Y=" << std::setw(6) << stick[1]
 		          << " | Slider: 0=" << std::setw(6) << slider[0]
 		          << " 1=" << std::setw(6) << slider[1]
+		          << " | Mouse: X=" << std::setw(6) << mouse[0]
+		          << " Y=" << std::setw(6) << mouse[1]
 		          << std::flush;
 
 		std::this_thread::sleep_for(std::chrono::milliseconds(16));

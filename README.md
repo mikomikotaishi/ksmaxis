@@ -14,6 +14,7 @@ A library for reading knob axis values using native OS APIs, designed for [ksm-v
 
 - `InputMode::kAnalogStick` - Analog Stick X/Y (circular)
 - `InputMode::kSlider` - Slider input (circular)
+- `InputMode::kMouse` - Mouse X/Y (relative)
 
 ## Build
 
