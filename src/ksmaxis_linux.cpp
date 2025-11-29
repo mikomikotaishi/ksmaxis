@@ -13,6 +13,7 @@
 #include <cstring>
 #include <climits>
 #include <chrono>
+#include <cerrno>
 
 namespace ksmaxis
 {
@@ -186,7 +187,7 @@ namespace ksmaxis
 					continue;
 				}
 
-				std::string path = "/dev/input/" + std::string(entry->d_name);
+				std::string path = "/dev/input/" + std::string{ entry->d_name };
 
 				// Skip if already opened
 				if (IsDeviceAlreadyOpened(path))
@@ -243,7 +244,7 @@ namespace ksmaxis
 			closedir(dir);
 		}
 
-		void ScanMouseDevices()
+		void ScanMouseDevices(std::vector<std::string>* pWarningStrings = nullptr)
 		{
 			DIR* dir = opendir("/dev/input");
 			if (!dir)
@@ -251,6 +252,7 @@ namespace ksmaxis
 				return;
 			}
 
+			bool permissionErrorReported = false;
 			struct dirent* entry;
 			while ((entry = readdir(dir)) != nullptr)
 			{
@@ -259,7 +261,7 @@ namespace ksmaxis
 					continue;
 				}
 
-				std::string path = "/dev/input/" + std::string(entry->d_name);
+				std::string path = "/dev/input/" + std::string{ entry->d_name };
 
 				// Skip if already opened as joystick
 				if (IsDeviceAlreadyOpened(path))
@@ -276,6 +278,11 @@ namespace ksmaxis
 				int fd = open(path.c_str(), O_RDONLY | O_NONBLOCK);
 				if (fd < 0)
 				{
+					if (errno == EACCES && !permissionErrorReported && pWarningStrings)
+					{
+						pWarningStrings->push_back("Permission denied: " + path + " (add user to 'input' group)");
+						permissionErrorReported = true;
+					}
 					continue;
 				}
 
@@ -321,7 +328,7 @@ namespace ksmaxis
 		}
 	}
 
-	bool Init(std::string* pErrorString)
+	bool Init(std::string* pErrorString, std::vector<std::string>* pWarningStrings)
 	{
 		if (s_initialized)
 		{
@@ -336,7 +343,7 @@ namespace ksmaxis
 		s_firstUpdate = true;
 		s_lastScanTime = std::chrono::steady_clock::now();
 		ScanDevices();
-		ScanMouseDevices();
+		ScanMouseDevices(pWarningStrings);
 
 		return true;
 	}

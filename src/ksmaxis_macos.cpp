@@ -247,7 +247,7 @@ namespace ksmaxis
 		}
 	}
 
-	bool Init(std::string* pErrorString)
+	bool Init(std::string* pErrorString, std::vector<std::string>* pWarningStrings)
 	{
 		if (s_initialized)
 		{
@@ -350,8 +350,10 @@ namespace ksmaxis
 			IOReturn mouseOpenResult = IOHIDManagerOpen(s_mouseHidManager, kIOHIDOptionsTypeNone);
 			if (mouseOpenResult != kIOReturnSuccess && mouseOpenResult != kIOReturnExclusiveAccess)
 			{
-				std::fprintf(stderr, "[ksmaxis warning] Mouse IOHIDManagerOpen failed: 0x%08X (%s)\n",
-					mouseOpenResult, GetIOReturnErrorString(mouseOpenResult));
+				if (pWarningStrings)
+				{
+					pWarningStrings->push_back(std::string{ "Mouse IOHIDManagerOpen failed: " } + GetIOReturnErrorString(mouseOpenResult));
+				}
 				CFRelease(s_mouseHidManager);
 				s_mouseHidManager = nullptr;
 			}

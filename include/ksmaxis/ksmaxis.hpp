@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <array>
 #include <string>
+#include <vector>
 
 namespace ksmaxis
 {
@@ -15,9 +16,9 @@ namespace ksmaxis
 	using AxisValues = std::array<double, 2>;
 
 #ifdef _WIN32
-	bool Init(void* hWnd, std::string* pErrorString = nullptr);
+	bool Init(void* hWnd, std::string* pErrorString = nullptr, std::vector<std::string>* pWarningStrings = nullptr);
 #else
-	bool Init(std::string* pErrorString = nullptr);
+	bool Init(std::string* pErrorString = nullptr, std::vector<std::string>* pWarningStrings = nullptr);
 #endif
 
 	void Terminate();

@@ -6,13 +6,10 @@
 
 #define DIRECTINPUT_VERSION 0x0800
 #include <windows.h>
-#include <commctrl.h>
 #include <hidusage.h>
 #include <dinput.h>
 
 #include "ksmaxis/ksmaxis.hpp"
-
-#pragma comment(lib, "comctl32.lib")
 
 #include <vector>
 #include <comdef.h>
@@ -51,14 +48,13 @@ namespace ksmaxis
 		AxisValues s_deltaMouse = { 0.0, 0.0 };
 		AxisValues s_mouseAccumulator = { 0.0, 0.0 };
 
-		HWND s_hWnd = nullptr;
-		constexpr UINT_PTR kSubclassId = 1;
+		HWND s_hiddenWnd = nullptr;
+		ATOM s_windowClass = 0;
 
-		LRESULT CALLBACK RawInputSubclassProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData)
+		constexpr wchar_t kWindowClassName[] = L"ksmaxis_RawInputWindow";
+
+		LRESULT CALLBACK RawInputWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 		{
-			(void)uIdSubclass;
-			(void)dwRefData;
-
 			if (msg == WM_INPUT)
 			{
 				UINT size = 0;
@@ -81,8 +77,9 @@ namespace ksmaxis
 						}
 					}
 				}
+				return 0;
 			}
-			return DefSubclassProc(hWnd, msg, wParam, lParam);
+			return DefWindowProcW(hWnd, msg, wParam, lParam);
 		}
 
 		double Normalize(LONG value)
@@ -110,6 +107,7 @@ namespace ksmaxis
 
 		BOOL CALLBACK EnumDevicesCallback(const DIDEVICEINSTANCEW* instance, VOID* context)
 		{
+			(void)context;
 			Device dev{};
 			dev.instance = *instance;
 			s_devices.push_back(dev);
@@ -129,9 +127,88 @@ namespace ksmaxis
 			WideCharToMultiByte(CP_UTF8, 0, msg, -1, &result[0], size, nullptr, nullptr);
 			return result;
 		}
+
+		bool InitRawInputWindow(std::string* pErrorString)
+		{
+			WNDCLASSEXW wc{};
+			wc.cbSize = sizeof(WNDCLASSEXW);
+			wc.lpfnWndProc = RawInputWndProc;
+			wc.hInstance = GetModuleHandle(nullptr);
+			wc.lpszClassName = kWindowClassName;
+
+			s_windowClass = RegisterClassExW(&wc);
+			if (!s_windowClass)
+			{
+				DWORD err = GetLastError();
+				if (err != ERROR_CLASS_ALREADY_EXISTS)
+				{
+					if (pErrorString)
+					{
+						*pErrorString = "Failed to register window class for raw input";
+					}
+					return false;
+				}
+			}
+
+			// Message-only window
+			s_hiddenWnd = CreateWindowExW(
+				0,
+				kWindowClassName,
+				L"",
+				0,
+				0, 0, 0, 0,
+				HWND_MESSAGE,
+				nullptr,
+				GetModuleHandle(nullptr),
+				nullptr
+			);
+
+			if (!s_hiddenWnd)
+			{
+				if (pErrorString)
+				{
+					*pErrorString = "Failed to create hidden window for raw input";
+				}
+				return false;
+			}
+
+			RAWINPUTDEVICE rid{};
+			rid.usUsagePage = HID_USAGE_PAGE_GENERIC;
+			rid.usUsage = HID_USAGE_GENERIC_MOUSE;
+			rid.dwFlags = RIDEV_INPUTSINK;
+			rid.hwndTarget = s_hiddenWnd;
+
+			if (!RegisterRawInputDevices(&rid, 1, sizeof(RAWINPUTDEVICE)))
+			{
+				if (pErrorString)
+				{
+					*pErrorString = "Failed to register raw input device";
+				}
+				DestroyWindow(s_hiddenWnd);
+				s_hiddenWnd = nullptr;
+				return false;
+			}
+
+			return true;
+		}
+
+		void TerminateRawInputWindow()
+		{
+			if (s_hiddenWnd)
+			{
+				DestroyWindow(s_hiddenWnd);
+				s_hiddenWnd = nullptr;
+			}
+
+			if (s_windowClass)
+			{
+				UnregisterClassW(kWindowClassName, GetModuleHandle(nullptr));
+				s_windowClass = 0;
+			}
+		}
 	}
 
-	bool Init(void* hWnd, std::string* pErrorString)
+	bool Init(void* hWnd, std::string* pErrorString, std::vector<std::string>* pWarningStrings)
 	{
 		if (s_initialized)
 		{
@@ -232,18 +309,11 @@ namespace ksmaxis
 			dev.opened = true;
 		}
 
-		// Register for raw mouse input
-		s_hWnd = static_cast<HWND>(hWnd);
-		if (s_hWnd)
+		// Mouse input unavailable on failure, but continue for other devices
+		std::string mouseError;
+		if (!InitRawInputWindow(&mouseError) && pWarningStrings)
 		{
-			SetWindowSubclass(s_hWnd, RawInputSubclassProc, kSubclassId, 0);
-
-			RAWINPUTDEVICE rid{};
-			rid.usUsagePage = HID_USAGE_PAGE_GENERIC;
-			rid.usUsage = HID_USAGE_GENERIC_MOUSE;
-			rid.dwFlags = RIDEV_INPUTSINK;
-			rid.hwndTarget = s_hWnd;
-			RegisterRawInputDevices(&rid, 1, sizeof(RAWINPUTDEVICE));
+			pWarningStrings->push_back(mouseError);
 		}
 
 		s_firstUpdate = true;
@@ -252,6 +322,8 @@ namespace ksmaxis
 
 	void Terminate()
 	{
+		TerminateRawInputWindow();
+
 		for (auto& dev : s_devices)
 		{
 			if (dev.device)
@@ -269,12 +341,6 @@ namespace ksmaxis
 			s_directInput = nullptr;
 		}
 
-		if (s_hWnd)
-		{
-			RemoveWindowSubclass(s_hWnd, RawInputSubclassProc, kSubclassId);
-			s_hWnd = nullptr;
-		}
-
 		s_initialized = false;
 	}
 
@@ -282,6 +348,17 @@ namespace ksmaxis
 	{
 		s_deltaAnalogStick = { 0.0, 0.0 };
 		s_deltaSlider = { 0.0, 0.0 };
+
+		// Pump messages to process Raw Input
+		if (s_hiddenWnd)
+		{
+			MSG msg;
+			while (PeekMessageW(&msg, s_hiddenWnd, 0, 0, PM_REMOVE))
+			{
+				TranslateMessage(&msg);
+				DispatchMessageW(&msg);
+			}
+		}
 
 		s_deltaMouse = s_mouseAccumulator;
 		s_mouseAccumulator = { 0.0, 0.0 };
