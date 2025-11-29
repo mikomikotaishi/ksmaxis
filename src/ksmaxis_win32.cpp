@@ -6,9 +6,13 @@
 
 #define DIRECTINPUT_VERSION 0x0800
 #include <windows.h>
+#include <commctrl.h>
+#include <hidusage.h>
 #include <dinput.h>
 
 #include "ksmaxis/ksmaxis.hpp"
+
+#pragma comment(lib, "comctl32.lib")
 
 #include <vector>
 #include <comdef.h>
@@ -44,6 +48,42 @@ namespace ksmaxis
 		bool s_firstUpdate = true;
 		AxisValues s_deltaAnalogStick = { 0.0, 0.0 };
 		AxisValues s_deltaSlider = { 0.0, 0.0 };
+		AxisValues s_deltaMouse = { 0.0, 0.0 };
+		AxisValues s_mouseAccumulator = { 0.0, 0.0 };
+
+		HWND s_hWnd = nullptr;
+		constexpr UINT_PTR kSubclassId = 1;
+
+		LRESULT CALLBACK RawInputSubclassProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData)
+		{
+			(void)uIdSubclass;
+			(void)dwRefData;
+
+			if (msg == WM_INPUT)
+			{
+				UINT size = 0;
+				GetRawInputData(reinterpret_cast<HRAWINPUT>(lParam), RID_INPUT, nullptr, &size, sizeof(RAWINPUTHEADER));
+
+				if (size > 0)
+				{
+					std::vector<BYTE> buffer(size);
+					if (GetRawInputData(reinterpret_cast<HRAWINPUT>(lParam), RID_INPUT, buffer.data(), &size, sizeof(RAWINPUTHEADER)) == size)
+					{
+						RAWINPUT* raw = reinterpret_cast<RAWINPUT*>(buffer.data());
+						if (raw->header.dwType == RIM_TYPEMOUSE)
+						{
+							// Only handle relative mouse movement
+							if ((raw->data.mouse.usFlags & MOUSE_MOVE_ABSOLUTE) == 0)
+							{
+								s_mouseAccumulator[0] += static_cast<double>(raw->data.mouse.lLastX);
+								s_mouseAccumulator[1] += static_cast<double>(raw->data.mouse.lLastY);
+							}
+						}
+					}
+				}
+			}
+			return DefSubclassProc(hWnd, msg, wParam, lParam);
+		}
 
 		double Normalize(LONG value)
 		{
@@ -91,7 +131,7 @@ namespace ksmaxis
 		}
 	}
 
-	bool Init(std::string* pErrorString)
+	bool Init(void* hWnd, std::string* pErrorString)
 	{
 		if (s_initialized)
 		{
@@ -156,13 +196,17 @@ namespace ksmaxis
 				continue;
 			}
 
-			HWND hwnd = GetConsoleWindow();
-			if (!hwnd)
+			HWND hwndForDInput = static_cast<HWND>(hWnd);
+			if (!hwndForDInput)
 			{
-				hwnd = GetDesktopWindow();
+				hwndForDInput = GetConsoleWindow();
+			}
+			if (!hwndForDInput)
+			{
+				hwndForDInput = GetDesktopWindow();
 			}
 
-			hr = dev.device->SetCooperativeLevel(hwnd, DISCL_BACKGROUND | DISCL_NONEXCLUSIVE);
+			hr = dev.device->SetCooperativeLevel(hwndForDInput, DISCL_BACKGROUND | DISCL_NONEXCLUSIVE);
 			if (FAILED(hr))
 			{
 				dev.device->Release();
@@ -188,6 +232,20 @@ namespace ksmaxis
 			dev.opened = true;
 		}
 
+		// Register for raw mouse input
+		s_hWnd = static_cast<HWND>(hWnd);
+		if (s_hWnd)
+		{
+			SetWindowSubclass(s_hWnd, RawInputSubclassProc, kSubclassId, 0);
+
+			RAWINPUTDEVICE rid{};
+			rid.usUsagePage = HID_USAGE_PAGE_GENERIC;
+			rid.usUsage = HID_USAGE_GENERIC_MOUSE;
+			rid.dwFlags = RIDEV_INPUTSINK;
+			rid.hwndTarget = s_hWnd;
+			RegisterRawInputDevices(&rid, 1, sizeof(RAWINPUTDEVICE));
+		}
+
 		s_firstUpdate = true;
 		return true;
 	}
@@ -211,6 +269,12 @@ namespace ksmaxis
 			s_directInput = nullptr;
 		}
 
+		if (s_hWnd)
+		{
+			RemoveWindowSubclass(s_hWnd, RawInputSubclassProc, kSubclassId);
+			s_hWnd = nullptr;
+		}
+
 		s_initialized = false;
 	}
 
@@ -218,6 +282,9 @@ namespace ksmaxis
 	{
 		s_deltaAnalogStick = { 0.0, 0.0 };
 		s_deltaSlider = { 0.0, 0.0 };
+
+		s_deltaMouse = s_mouseAccumulator;
+		s_mouseAccumulator = { 0.0, 0.0 };
 
 		if (!s_initialized)
 		{
@@ -277,10 +344,11 @@ namespace ksmaxis
 		{
 			return s_deltaAnalogStick;
 		}
-		else
+		else if (mode == InputMode::kMouse)
 		{
-			return s_deltaSlider;
+			return s_deltaMouse;
 		}
+		return s_deltaSlider;
 	}
 }
 

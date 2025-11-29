@@ -46,11 +46,22 @@ namespace ksmaxis
 			bool opened = false;
 		};
 
+		struct MouseDevice
+		{
+			std::string path;
+			int fd = -1;
+			double deltaX = 0.0;
+			double deltaY = 0.0;
+			bool opened = false;
+		};
+
 		std::vector<Device> s_devices;
+		std::vector<MouseDevice> s_mouseDevices;
 		bool s_initialized = false;
 		bool s_firstUpdate = true;
 		AxisValues s_deltaAnalogStick = { 0.0, 0.0 };
 		AxisValues s_deltaSlider = { 0.0, 0.0 };
+		AxisValues s_deltaMouse = { 0.0, 0.0 };
 		std::chrono::steady_clock::time_point s_lastScanTime;
 
 		double Normalize(const Device& dev, std::int32_t code, std::int32_t value)
@@ -101,6 +112,18 @@ namespace ksmaxis
 			return false;
 		}
 
+		bool IsMouseDeviceAlreadyOpened(const std::string& path)
+		{
+			for (const auto& dev : s_mouseDevices)
+			{
+				if (dev.path == path)
+				{
+					return true;
+				}
+			}
+			return false;
+		}
+
 		void RemoveDisconnectedDevices()
 		{
 			for (auto it = s_devices.begin(); it != s_devices.end();)
@@ -116,6 +139,29 @@ namespace ksmaxis
 				{
 					close(it->fd);
 					it = s_devices.erase(it);
+				}
+				else
+				{
+					++it;
+				}
+			}
+		}
+
+		void RemoveDisconnectedMouseDevices()
+		{
+			for (auto it = s_mouseDevices.begin(); it != s_mouseDevices.end();)
+			{
+				if (!it->opened || it->fd < 0)
+				{
+					++it;
+					continue;
+				}
+
+				struct input_id id;
+				if (ioctl(it->fd, EVIOCGID, &id) < 0)
+				{
+					close(it->fd);
+					it = s_mouseDevices.erase(it);
 				}
 				else
 				{
@@ -196,6 +242,83 @@ namespace ksmaxis
 
 			closedir(dir);
 		}
+
+		void ScanMouseDevices()
+		{
+			DIR* dir = opendir("/dev/input");
+			if (!dir)
+			{
+				return;
+			}
+
+			struct dirent* entry;
+			while ((entry = readdir(dir)) != nullptr)
+			{
+				if (strncmp(entry->d_name, "event", 5) != 0)
+				{
+					continue;
+				}
+
+				std::string path = "/dev/input/" + std::string(entry->d_name);
+
+				// Skip if already opened as joystick
+				if (IsDeviceAlreadyOpened(path))
+				{
+					continue;
+				}
+
+				// Skip if already opened as mouse
+				if (IsMouseDeviceAlreadyOpened(path))
+				{
+					continue;
+				}
+
+				int fd = open(path.c_str(), O_RDONLY | O_NONBLOCK);
+				if (fd < 0)
+				{
+					continue;
+				}
+
+				unsigned long evBits[(EV_CNT + kBitsPerLong - 1) / kBitsPerLong] = {};
+				if (ioctl(fd, EVIOCGBIT(0, sizeof(evBits)), evBits) < 0)
+				{
+					close(fd);
+					continue;
+				}
+
+				// Check for relative events (mice report EV_REL)
+				bool hasRel = evBits[EV_REL / kBitsPerLong] & (1UL << (EV_REL % kBitsPerLong));
+				if (!hasRel)
+				{
+					close(fd);
+					continue;
+				}
+
+				// Check for REL_X and REL_Y (mouse movement axes)
+				unsigned long relBits[(REL_CNT + kBitsPerLong - 1) / kBitsPerLong] = {};
+				if (ioctl(fd, EVIOCGBIT(EV_REL, sizeof(relBits)), relBits) < 0)
+				{
+					close(fd);
+					continue;
+				}
+
+				bool hasRelX = relBits[REL_X / kBitsPerLong] & (1UL << (REL_X % kBitsPerLong));
+				bool hasRelY = relBits[REL_Y / kBitsPerLong] & (1UL << (REL_Y % kBitsPerLong));
+				if (!hasRelX || !hasRelY)
+				{
+					close(fd);
+					continue;
+				}
+
+				MouseDevice dev{};
+				dev.path = path;
+				dev.fd = fd;
+				dev.opened = true;
+				s_mouseDevices.push_back(std::move(dev));
+			}
+
+			closedir(dir);
+		}
 	}
 
 	bool Init(std::string* pErrorString)
@@ -213,6 +336,7 @@ namespace ksmaxis
 		s_firstUpdate = true;
 		s_lastScanTime = std::chrono::steady_clock::now();
 		ScanDevices();
+		ScanMouseDevices();
 
 		return true;
 	}
@@ -228,6 +352,17 @@ namespace ksmaxis
 			}
 		}
 		s_devices.clear();
+
+		for (auto& dev : s_mouseDevices)
+		{
+			if (dev.fd >= 0)
+			{
+				close(dev.fd);
+				dev.fd = -1;
+			}
+		}
+		s_mouseDevices.clear();
+
 		s_initialized = false;
 	}
 
@@ -235,6 +370,7 @@ namespace ksmaxis
 	{
 		s_deltaAnalogStick = { 0.0, 0.0 };
 		s_deltaSlider = { 0.0, 0.0 };
+		s_deltaMouse = { 0.0, 0.0 };
 
 		if (!s_initialized)
 		{
@@ -246,7 +382,9 @@ namespace ksmaxis
 		if (elapsed.count() >= 1000)
 		{
 			RemoveDisconnectedDevices();
+			RemoveDisconnectedMouseDevices();
 			ScanDevices();
+			ScanMouseDevices();
 			s_lastScanTime = now;
 		}
 
@@ -299,6 +437,41 @@ namespace ksmaxis
 			dev.prevSlider1 = dev.slider1;
 		}
 
+		// Process mouse devices
+		for (auto& dev : s_mouseDevices)
+		{
+			if (!dev.opened || dev.fd < 0)
+			{
+				continue;
+			}
+
+			struct input_event ev{};
+			while (read(dev.fd, &ev, sizeof(ev)) == sizeof(ev))
+			{
+				if (ev.type != EV_REL)
+				{
+					continue;
+				}
+
+				if (ev.code == REL_X)
+				{
+					dev.deltaX += static_cast<double>(ev.value);
+				}
+				else if (ev.code == REL_Y)
+				{
+					dev.deltaY += static_cast<double>(ev.value);
+				}
+			}
+
+			// Accumulate mouse deltas from all devices
+			s_deltaMouse[0] += dev.deltaX;
+			s_deltaMouse[1] += dev.deltaY;
+
+			// Reset device accumulators
+			dev.deltaX = 0.0;
+			dev.deltaY = 0.0;
+		}
+
 		s_firstUpdate = false;
 	}
 
@@ -308,10 +481,11 @@ namespace ksmaxis
 		{
 			return s_deltaAnalogStick;
 		}
-		else
+		else if (mode == InputMode::kMouse)
 		{
-			return s_deltaSlider;
+			return s_deltaMouse;
 		}
+		return s_deltaSlider;
 	}
 }
 

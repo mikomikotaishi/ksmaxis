@@ -19,6 +19,9 @@ namespace ksmaxis
 		constexpr std::uint32_t kUsageSlider = 0x36;
 		constexpr std::uint32_t kUsageDial = 0x37;
 
+		// Mouse-specific usages
+		constexpr std::uint32_t kUsagePageButton = 0x09;
+
 		// Wrap-around detection threshold (half of normalized range)
 		constexpr double kWrapThreshold = 0.5;
 
@@ -36,12 +39,23 @@ namespace ksmaxis
 			double prevSlider1 = 0.0;
 		};
 
+		struct MouseDevice
+		{
+			IOHIDDeviceRef device = nullptr;
+			char productName[256] = {};
+			double deltaX = 0.0;
+			double deltaY = 0.0;
+		};
+
 		IOHIDManagerRef s_hidManager = nullptr;
+		IOHIDManagerRef s_mouseHidManager = nullptr;
 		std::vector<Device> s_devices;
+		std::vector<MouseDevice> s_mouseDevices;
 		bool s_initialized = false;
 		bool s_firstUpdate = true;
 		AxisValues s_deltaAnalogStick = { 0.0, 0.0 };
 		AxisValues s_deltaSlider = { 0.0, 0.0 };
+		AxisValues s_deltaMouse = { 0.0, 0.0 };
 
 		const char* GetIOReturnErrorString(IOReturn result)
 		{
@@ -75,6 +89,15 @@ namespace ksmaxis
 		Device* FindDevice(IOHIDDeviceRef deviceRef)
 		{
 			for (auto& dev : s_devices)
+			{
+				if (dev.device == deviceRef) return &dev;
+			}
+			return nullptr;
+		}
+
+		MouseDevice* FindMouseDevice(IOHIDDeviceRef deviceRef)
+		{
+			for (auto& dev : s_mouseDevices)
 			{
 				if (dev.device == deviceRef) return &dev;
 			}
@@ -155,6 +178,73 @@ namespace ksmaxis
 				}
 			}
 		}
+
+		// Mouse callbacks
+		void MouseInputValueCallback(void* context, IOReturn result, void* sender, IOHIDValueRef valueRef)
+		{
+			if (!valueRef) return;
+
+			IOHIDElementRef element = IOHIDValueGetElement(valueRef);
+			if (!element) return;
+
+			IOHIDDeviceRef deviceRef = IOHIDElementGetDevice(element);
+			if (!deviceRef) return;
+
+			MouseDevice* dev = FindMouseDevice(deviceRef);
+			if (!dev) return;
+
+			std::uint32_t usagePage = IOHIDElementGetUsagePage(element);
+			std::uint32_t usage = IOHIDElementGetUsage(element);
+
+			if (usagePage != kUsagePageGenericDesktop) return;
+
+			std::int64_t intValue = IOHIDValueGetIntegerValue(valueRef);
+
+			if (usage == kUsageX)
+			{
+				dev->deltaX += static_cast<double>(intValue);
+			}
+			else if (usage == kUsageY)
+			{
+				dev->deltaY += static_cast<double>(intValue);
+			}
+		}
+
+		void MouseDeviceMatchedCallback(void* context, IOReturn result, void* sender, IOHIDDeviceRef deviceRef)
+		{
+			if (!deviceRef) return;
+			if (FindMouseDevice(deviceRef)) return;
+
+			MouseDevice dev{};
+			dev.device = deviceRef;
+
+			CFStringRef productRef = (CFStringRef)IOHIDDeviceGetProperty(deviceRef, CFSTR(kIOHIDProductKey));
+			if (productRef)
+			{
+				CFStringGetCString(productRef, dev.productName, sizeof(dev.productName), kCFStringEncodingUTF8);
+			}
+			else
+			{
+				snprintf(dev.productName, sizeof(dev.productName), "Unknown Mouse");
+			}
+
+			s_mouseDevices.push_back(dev);
+
+			IOHIDDeviceRegisterInputValueCallback(deviceRef, MouseInputValueCallback, nullptr);
+			IOHIDDeviceScheduleWithRunLoop(deviceRef, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
+		}
+
+		void MouseDeviceRemovedCallback(void* context, IOReturn result, void* sender, IOHIDDeviceRef deviceRef)
+		{
+			for (auto it = s_mouseDevices.begin(); it != s_mouseDevices.end(); ++it)
+			{
+				if (it->device == deviceRef)
+				{
+					s_mouseDevices.erase(it);
+					break;
+				}
+			}
+		}
 	}
 
 	bool Init(std::string* pErrorString)
@@ -229,6 +319,49 @@ namespace ksmaxis
 			CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.01, true);
 		}
 
+		// Initialize mouse HID manager
+		s_mouseHidManager = IOHIDManagerCreate(kCFAllocatorDefault, kIOHIDOptionsTypeNone);
+		if (s_mouseHidManager)
+		{
+			std::int32_t mouseUsagePage = kHIDPage_GenericDesktop;
+			std::int32_t mouseUsage = kHIDUsage_GD_Mouse;
+
+			CFMutableDictionaryRef mouseMatchDict = CFDictionaryCreateMutable(
+				kCFAllocatorDefault, 0,
+				&kCFTypeDictionaryKeyCallBacks,
+				&kCFTypeDictionaryValueCallBacks
+			);
+			CFNumberRef mousePageRef = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &mouseUsagePage);
+			CFNumberRef mouseUsageRef = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &mouseUsage);
+			CFDictionarySetValue(mouseMatchDict, CFSTR(kIOHIDDeviceUsagePageKey), mousePageRef);
+			CFDictionarySetValue(mouseMatchDict, CFSTR(kIOHIDDeviceUsageKey), mouseUsageRef);
+			CFRelease(mousePageRef);
+			CFRelease(mouseUsageRef);
+
+			IOHIDManagerSetDeviceMatching(s_mouseHidManager, mouseMatchDict);
+			CFRelease(mouseMatchDict);
+
+			IOHIDManagerRegisterDeviceMatchingCallback(s_mouseHidManager, MouseDeviceMatchedCallback, nullptr);
+			IOHIDManagerRegisterDeviceRemovalCallback(s_mouseHidManager, MouseDeviceRemovedCallback, nullptr);
+			IOHIDManagerRegisterInputValueCallback(s_mouseHidManager, MouseInputValueCallback, nullptr);
+
+			IOHIDManagerScheduleWithRunLoop(s_mouseHidManager, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
+
+			IOReturn mouseOpenResult = IOHIDManagerOpen(s_mouseHidManager, kIOHIDOptionsTypeNone);
+			if (mouseOpenResult != kIOReturnSuccess && mouseOpenResult != kIOReturnExclusiveAccess)
+			{
+				std::fprintf(stderr, "[ksmaxis warning] Mouse IOHIDManagerOpen failed: 0x%08X (%s)\n",
+					mouseOpenResult, GetIOReturnErrorString(mouseOpenResult));
+				CFRelease(s_mouseHidManager);
+				s_mouseHidManager = nullptr;
+			}
+
+			for (int i = 0; i < 10; ++i)
+			{
+				CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.01, true);
+			}
+		}
+
 		s_initialized = true;
 		s_firstUpdate = true;
 		return true;
@@ -243,7 +376,15 @@ namespace ksmaxis
 			CFRelease(s_hidManager);
 			s_hidManager = nullptr;
 		}
+		if (s_mouseHidManager)
+		{
+			IOHIDManagerUnscheduleFromRunLoop(s_mouseHidManager, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
+			IOHIDManagerClose(s_mouseHidManager, kIOHIDOptionsTypeNone);
+			CFRelease(s_mouseHidManager);
+			s_mouseHidManager = nullptr;
+		}
 		s_devices.clear();
+		s_mouseDevices.clear();
 		s_initialized = false;
 	}
 
@@ -251,6 +392,7 @@ namespace ksmaxis
 	{
 		s_deltaAnalogStick = { 0.0, 0.0 };
 		s_deltaSlider = { 0.0, 0.0 };
+		s_deltaMouse = { 0.0, 0.0 };
 
 		if (!s_initialized) return;
 
@@ -272,6 +414,14 @@ namespace ksmaxis
 			dev.prevSlider1 = dev.slider1;
 		}
 
+		for (auto& dev : s_mouseDevices)
+		{
+			s_deltaMouse[0] += dev.deltaX;
+			s_deltaMouse[1] += dev.deltaY;
+			dev.deltaX = 0.0;
+			dev.deltaY = 0.0;
+		}
+
 		s_firstUpdate = false;
 	}
 
@@ -280,6 +430,10 @@ namespace ksmaxis
 		if (mode == InputMode::kAnalogStick)
 		{
 			return s_deltaAnalogStick;
+		}
+		else if (mode == InputMode::kMouse)
+		{
+			return s_deltaMouse;
 		}
 		return s_deltaSlider;
 	}
