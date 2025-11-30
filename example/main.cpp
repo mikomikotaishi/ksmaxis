@@ -23,7 +23,7 @@ int main()
 	});
 
 	std::string errorString;
-	if (!ksmaxis::Init(&errorString))
+	if (!ksmaxis::Init(ksmaxis::DeviceFlags::All, &errorString))
 	{
 		std::cerr << "Init failed: " << errorString << std::endl;
 		return 1;

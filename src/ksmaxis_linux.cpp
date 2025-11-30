@@ -58,7 +58,7 @@ namespace ksmaxis
 
 		std::vector<JoystickDevice> s_joystickDevices;
 		X11MouseContext s_x11Mouse;
-		bool s_initialized = false;
+		DeviceFlags s_initializedDevices = DeviceFlags::None;
 		bool s_firstUpdate = true;
 		AxisValues s_deltaAnalogStick = { 0.0, 0.0 };
 		AxisValues s_deltaSlider = { 0.0, 0.0 };
@@ -276,24 +276,43 @@ namespace ksmaxis
 		}
 	}
 
-	bool Init(std::string* pErrorString, std::vector<std::string>* pWarningStrings)
+	bool Init(DeviceFlags deviceFlags, std::string* pErrorString, std::vector<std::string>* pWarningStrings)
 	{
-		if (s_initialized)
+		// Skip already initialized devices
+		deviceFlags = deviceFlags & ~s_initializedDevices;
+		if (deviceFlags == DeviceFlags::None)
 		{
-			if (pErrorString)
-			{
-				*pErrorString = "Already initialized";
-			}
-			return false;
+			return true;
 		}
 
-		s_initialized = true;
 		s_firstUpdate = true;
 		s_lastScanTime = std::chrono::steady_clock::now();
-		ScanJoystickDevices();
-		InitX11Mouse(pWarningStrings);
+
+		if ((deviceFlags & DeviceFlags::Joystick) != DeviceFlags::None)
+		{
+			ScanJoystickDevices();
+			s_initializedDevices = s_initializedDevices | DeviceFlags::Joystick;
+		}
+
+		if ((deviceFlags & DeviceFlags::Mouse) != DeviceFlags::None)
+		{
+			if (InitX11Mouse(pWarningStrings))
+			{
+				s_initializedDevices = s_initializedDevices | DeviceFlags::Mouse;
+			}
+		}
 
 		return true;
+	}
+
+	bool IsInitialized()
+	{
+		return s_initializedDevices != DeviceFlags::None;
+	}
+
+	bool IsInitialized(DeviceFlags deviceFlags)
+	{
+		return (s_initializedDevices & deviceFlags) == deviceFlags;
 	}
 
 	void Terminate()
@@ -310,7 +329,7 @@ namespace ksmaxis
 
 		TerminateX11Mouse();
 
-		s_initialized = false;
+		s_initializedDevices = DeviceFlags::None;
 	}
 
 	void Update()
@@ -319,7 +338,7 @@ namespace ksmaxis
 		s_deltaSlider = { 0.0, 0.0 };
 		s_deltaMouse = { 0.0, 0.0 };
 
-		if (!s_initialized)
+		if (s_initializedDevices == DeviceFlags::None)
 		{
 			return;
 		}

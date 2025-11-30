@@ -41,7 +41,7 @@ namespace ksmaxis
 
 		LPDIRECTINPUT8W s_directInput = nullptr;
 		std::vector<JoystickDevice> s_joystickDevices;
-		bool s_initialized = false;
+		DeviceFlags s_initializedDevices = DeviceFlags::None;
 		bool s_firstUpdate = true;
 		AxisValues s_deltaAnalogStick = { 0.0, 0.0 };
 		AxisValues s_deltaSlider = { 0.0, 0.0 };
@@ -207,120 +207,140 @@ namespace ksmaxis
 		}
 	}
 
-	bool Init(void* hWnd, std::string* pErrorString, std::vector<std::string>* pWarningStrings)
+	bool Init(DeviceFlags deviceFlags, void* hWnd, std::string* pErrorString, std::vector<std::string>* pWarningStrings)
 	{
-		if (s_initialized)
+		// Skip already initialized devices
+		deviceFlags = deviceFlags & ~s_initializedDevices;
+		if (deviceFlags == DeviceFlags::None)
 		{
-			if (pErrorString)
-			{
-				*pErrorString = "Already initialized";
-			}
-			return false;
+			return true;
 		}
-
-		s_initialized = true;
 
 		// Initialize DirectInput for joysticks
-		HRESULT hr = DirectInput8Create(
-			GetModuleHandle(nullptr),
-			DIRECTINPUT_VERSION,
-			IID_IDirectInput8W,
-			reinterpret_cast<void**>(&s_directInput),
-			nullptr);
-
-		if (FAILED(hr))
+		if ((deviceFlags & DeviceFlags::Joystick) != DeviceFlags::None)
 		{
-			if (pWarningStrings)
-			{
-				pWarningStrings->push_back(std::string{ "DirectInput8Create failed: " } + GetHResultErrorString(hr));
-			}
-			s_directInput = nullptr;
-		}
-
-		if (s_directInput)
-		{
-			hr = s_directInput->EnumDevices(
-				DI8DEVCLASS_GAMECTRL,
-				EnumDevicesCallback,
-				nullptr,
-				DIEDFL_ATTACHEDONLY);
+			HRESULT hr = DirectInput8Create(
+				GetModuleHandle(nullptr),
+				DIRECTINPUT_VERSION,
+				IID_IDirectInput8W,
+				reinterpret_cast<void**>(&s_directInput),
+				nullptr);
 
 			if (FAILED(hr))
 			{
 				if (pWarningStrings)
 				{
-					pWarningStrings->push_back(std::string{ "EnumDevices failed: " } + GetHResultErrorString(hr));
+					pWarningStrings->push_back(std::string{ "DirectInput8Create failed: " } + GetHResultErrorString(hr));
 				}
-				s_directInput->Release();
 				s_directInput = nullptr;
 			}
-		}
 
-		// Open all joystick devices
-		if (s_directInput)
-		{
-			for (auto& dev : s_joystickDevices)
+			if (s_directInput)
 			{
-				hr = s_directInput->CreateDevice(dev.instance.guidInstance, &dev.device, nullptr);
+				hr = s_directInput->EnumDevices(
+					DI8DEVCLASS_GAMECTRL,
+					EnumDevicesCallback,
+					nullptr,
+					DIEDFL_ATTACHEDONLY);
+
 				if (FAILED(hr))
 				{
-					continue;
+					if (pWarningStrings)
+					{
+						pWarningStrings->push_back(std::string{ "EnumDevices failed: " } + GetHResultErrorString(hr));
+					}
+					s_directInput->Release();
+					s_directInput = nullptr;
 				}
+			}
 
-				hr = dev.device->SetDataFormat(&c_dfDIJoystick2);
-				if (FAILED(hr))
+			// Open all joystick devices
+			if (s_directInput)
+			{
+				for (auto& dev : s_joystickDevices)
 				{
-					dev.device->Release();
-					dev.device = nullptr;
-					continue;
-				}
+					hr = s_directInput->CreateDevice(dev.instance.guidInstance, &dev.device, nullptr);
+					if (FAILED(hr))
+					{
+						continue;
+					}
 
-				HWND hwndForDInput = static_cast<HWND>(hWnd);
-				if (!hwndForDInput)
-				{
-					hwndForDInput = GetConsoleWindow();
-				}
-				if (!hwndForDInput)
-				{
-					hwndForDInput = GetDesktopWindow();
-				}
+					hr = dev.device->SetDataFormat(&c_dfDIJoystick2);
+					if (FAILED(hr))
+					{
+						dev.device->Release();
+						dev.device = nullptr;
+						continue;
+					}
 
-				hr = dev.device->SetCooperativeLevel(hwndForDInput, DISCL_BACKGROUND | DISCL_NONEXCLUSIVE);
-				if (FAILED(hr))
-				{
-					dev.device->Release();
-					dev.device = nullptr;
-					continue;
+					HWND hwndForDInput = static_cast<HWND>(hWnd);
+					if (!hwndForDInput)
+					{
+						hwndForDInput = GetConsoleWindow();
+					}
+					if (!hwndForDInput)
+					{
+						hwndForDInput = GetDesktopWindow();
+					}
+
+					hr = dev.device->SetCooperativeLevel(hwndForDInput, DISCL_BACKGROUND | DISCL_NONEXCLUSIVE);
+					if (FAILED(hr))
+					{
+						dev.device->Release();
+						dev.device = nullptr;
+						continue;
+					}
+
+					DIPROPRANGE propRange{};
+					propRange.diph.dwSize = sizeof(DIPROPRANGE);
+					propRange.diph.dwHeaderSize = sizeof(DIPROPHEADER);
+					propRange.diph.dwHow = DIPH_BYOFFSET;
+					propRange.lMin = -32768;
+					propRange.lMax = 32767;
+
+					DWORD offsets[] = { DIJOFS_X, DIJOFS_Y, DIJOFS_SLIDER(0), DIJOFS_SLIDER(1) };
+					for (DWORD offset : offsets)
+					{
+						propRange.diph.dwObj = offset;
+						dev.device->SetProperty(DIPROP_RANGE, &propRange.diph);
+					}
+
+					dev.device->Acquire();
+					dev.opened = true;
 				}
-
-				DIPROPRANGE propRange{};
-				propRange.diph.dwSize = sizeof(DIPROPRANGE);
-				propRange.diph.dwHeaderSize = sizeof(DIPROPHEADER);
-				propRange.diph.dwHow = DIPH_BYOFFSET;
-				propRange.lMin = -32768;
-				propRange.lMax = 32767;
-
-				DWORD offsets[] = { DIJOFS_X, DIJOFS_Y, DIJOFS_SLIDER(0), DIJOFS_SLIDER(1) };
-				for (DWORD offset : offsets)
-				{
-					propRange.diph.dwObj = offset;
-					dev.device->SetProperty(DIPROP_RANGE, &propRange.diph);
-				}
-
-				dev.device->Acquire();
-				dev.opened = true;
+				s_initializedDevices = s_initializedDevices | DeviceFlags::Joystick;
 			}
 		}
 
 		// Initialize mouse input
-		std::string mouseError;
-		if (!InitRawInputWindow(&mouseError) && pWarningStrings)
+		if ((deviceFlags & DeviceFlags::Mouse) != DeviceFlags::None)
 		{
-			pWarningStrings->push_back(mouseError);
+			std::string mouseError;
+			if (!InitRawInputWindow(&mouseError))
+			{
+				if (pWarningStrings)
+				{
+					pWarningStrings->push_back(mouseError);
+				}
+			}
+			else
+			{
+				s_initializedDevices = s_initializedDevices | DeviceFlags::Mouse;
+			}
 		}
 
 		s_firstUpdate = true;
 		return true;
+	}
+
+	bool IsInitialized()
+	{
+		return s_initializedDevices != DeviceFlags::None;
+	}
+
+	bool IsInitialized(DeviceFlags deviceFlags)
+	{
+		return (s_initializedDevices & deviceFlags) == deviceFlags;
 	}
 
 	void Terminate()
@@ -344,7 +364,7 @@ namespace ksmaxis
 			s_directInput = nullptr;
 		}
 
-		s_initialized = false;
+		s_initializedDevices = DeviceFlags::None;
 	}
 
 	void Update()
@@ -365,7 +385,7 @@ namespace ksmaxis
 		s_deltaMouse = s_mouseAccumulator;
 		s_mouseAccumulator = { 0.0, 0.0 };
 
-		if (!s_initialized)
+		if (s_initializedDevices == DeviceFlags::None)
 		{
 			return;
 		}

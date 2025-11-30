@@ -49,7 +49,7 @@ namespace ksmaxis
 		IOHIDManagerRef s_mouseHidManager = nullptr;
 		std::vector<JoystickDevice> s_joystickDevices;
 		std::vector<MouseDevice> s_mouseDevices;
-		bool s_initialized = false;
+		DeviceFlags s_initializedDevices = DeviceFlags::None;
 		bool s_firstUpdate = true;
 		AxisValues s_deltaAnalogStick = { 0.0, 0.0 };
 		AxisValues s_deltaSlider = { 0.0, 0.0 };
@@ -245,130 +245,145 @@ namespace ksmaxis
 		}
 	}
 
-	bool Init(std::string* pErrorString, std::vector<std::string>* pWarningStrings)
+	bool Init(DeviceFlags deviceFlags, std::string* pErrorString, std::vector<std::string>* pWarningStrings)
 	{
-		if (s_initialized)
+		// Skip already initialized devices
+		deviceFlags = deviceFlags & ~s_initializedDevices;
+		if (deviceFlags == DeviceFlags::None)
 		{
-			if (pErrorString)
-			{
-				*pErrorString = "Already initialized";
-			}
-			return false;
+			return true;
 		}
 
-		s_initialized = true;
 		s_firstUpdate = true;
 
 		// Initialize joystick HID manager (failure is non-fatal)
-		s_joystickHidManager = IOHIDManagerCreate(kCFAllocatorDefault, kIOHIDOptionsTypeNone);
-		if (!s_joystickHidManager)
+		if ((deviceFlags & DeviceFlags::Joystick) != DeviceFlags::None)
 		{
-			if (pWarningStrings)
-			{
-				pWarningStrings->push_back("Joystick IOHIDManagerCreate failed");
-			}
-		}
-		else
-		{
-			std::int32_t usagePage = kHIDPage_GenericDesktop;
-			std::int32_t usages[] = {
-				kHIDUsage_GD_Joystick,
-				kHIDUsage_GD_GamePad,
-				kHIDUsage_GD_MultiAxisController
-			};
-
-			CFMutableArrayRef matchArray = CFArrayCreateMutable(kCFAllocatorDefault, 0, &kCFTypeArrayCallBacks);
-			for (std::int32_t usage : usages)
-			{
-				CFMutableDictionaryRef matchDict = CFDictionaryCreateMutable(
-					kCFAllocatorDefault, 0,
-					&kCFTypeDictionaryKeyCallBacks,
-					&kCFTypeDictionaryValueCallBacks);
-				CFNumberRef pageRef = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &usagePage);
-				CFNumberRef usageRef = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &usage);
-				CFDictionarySetValue(matchDict, CFSTR(kIOHIDDeviceUsagePageKey), pageRef);
-				CFDictionarySetValue(matchDict, CFSTR(kIOHIDDeviceUsageKey), usageRef);
-				CFRelease(pageRef);
-				CFRelease(usageRef);
-				CFArrayAppendValue(matchArray, matchDict);
-				CFRelease(matchDict);
-			}
-
-			IOHIDManagerSetDeviceMatchingMultiple(s_joystickHidManager, matchArray);
-			CFRelease(matchArray);
-
-			IOHIDManagerRegisterDeviceMatchingCallback(s_joystickHidManager, JoystickDeviceMatchedCallback, nullptr);
-			IOHIDManagerRegisterDeviceRemovalCallback(s_joystickHidManager, JoystickDeviceRemovedCallback, nullptr);
-			IOHIDManagerRegisterInputValueCallback(s_joystickHidManager, JoystickInputValueCallback, nullptr);
-
-			IOHIDManagerScheduleWithRunLoop(s_joystickHidManager, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
-
-			IOReturn openResult = IOHIDManagerOpen(s_joystickHidManager, kIOHIDOptionsTypeNone);
-			if (openResult != kIOReturnSuccess && openResult != kIOReturnExclusiveAccess)
+			s_joystickHidManager = IOHIDManagerCreate(kCFAllocatorDefault, kIOHIDOptionsTypeNone);
+			if (!s_joystickHidManager)
 			{
 				if (pWarningStrings)
 				{
-					pWarningStrings->push_back(std::string{ "Joystick IOHIDManagerOpen failed: " } + GetIOReturnErrorString(openResult));
+					pWarningStrings->push_back("Joystick IOHIDManagerCreate failed");
 				}
-				CFRelease(s_joystickHidManager);
-				s_joystickHidManager = nullptr;
 			}
 			else
 			{
-				for (double t = 0.0; t < kDeviceMatchingWaitSec; t += kRunLoopIntervalSec)
+				std::int32_t usagePage = kHIDPage_GenericDesktop;
+				std::int32_t usages[] = {
+					kHIDUsage_GD_Joystick,
+					kHIDUsage_GD_GamePad,
+					kHIDUsage_GD_MultiAxisController
+				};
+
+				CFMutableArrayRef matchArray = CFArrayCreateMutable(kCFAllocatorDefault, 0, &kCFTypeArrayCallBacks);
+				for (std::int32_t usage : usages)
 				{
-					CFRunLoopRunInMode(kCFRunLoopDefaultMode, kRunLoopIntervalSec, true);
+					CFMutableDictionaryRef matchDict = CFDictionaryCreateMutable(
+						kCFAllocatorDefault, 0,
+						&kCFTypeDictionaryKeyCallBacks,
+						&kCFTypeDictionaryValueCallBacks);
+					CFNumberRef pageRef = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &usagePage);
+					CFNumberRef usageRef = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &usage);
+					CFDictionarySetValue(matchDict, CFSTR(kIOHIDDeviceUsagePageKey), pageRef);
+					CFDictionarySetValue(matchDict, CFSTR(kIOHIDDeviceUsageKey), usageRef);
+					CFRelease(pageRef);
+					CFRelease(usageRef);
+					CFArrayAppendValue(matchArray, matchDict);
+					CFRelease(matchDict);
+				}
+
+				IOHIDManagerSetDeviceMatchingMultiple(s_joystickHidManager, matchArray);
+				CFRelease(matchArray);
+
+				IOHIDManagerRegisterDeviceMatchingCallback(s_joystickHidManager, JoystickDeviceMatchedCallback, nullptr);
+				IOHIDManagerRegisterDeviceRemovalCallback(s_joystickHidManager, JoystickDeviceRemovedCallback, nullptr);
+				IOHIDManagerRegisterInputValueCallback(s_joystickHidManager, JoystickInputValueCallback, nullptr);
+
+				IOHIDManagerScheduleWithRunLoop(s_joystickHidManager, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
+
+				IOReturn openResult = IOHIDManagerOpen(s_joystickHidManager, kIOHIDOptionsTypeNone);
+				if (openResult != kIOReturnSuccess && openResult != kIOReturnExclusiveAccess)
+				{
+					if (pWarningStrings)
+					{
+						pWarningStrings->push_back(std::string{ "Joystick IOHIDManagerOpen failed: " } + GetIOReturnErrorString(openResult));
+					}
+					CFRelease(s_joystickHidManager);
+					s_joystickHidManager = nullptr;
+				}
+				else
+				{
+					for (double t = 0.0; t < kDeviceMatchingWaitSec; t += kRunLoopIntervalSec)
+					{
+						CFRunLoopRunInMode(kCFRunLoopDefaultMode, kRunLoopIntervalSec, true);
+					}
+					s_initializedDevices = s_initializedDevices | DeviceFlags::Joystick;
 				}
 			}
 		}
 
 		// Initialize mouse HID manager
-		s_mouseHidManager = IOHIDManagerCreate(kCFAllocatorDefault, kIOHIDOptionsTypeNone);
-		if (s_mouseHidManager)
+		if ((deviceFlags & DeviceFlags::Mouse) != DeviceFlags::None)
 		{
-			std::int32_t mouseUsagePage = kHIDPage_GenericDesktop;
-			std::int32_t mouseUsage = kHIDUsage_GD_Mouse;
-
-			CFMutableDictionaryRef mouseMatchDict = CFDictionaryCreateMutable(
-				kCFAllocatorDefault, 0,
-				&kCFTypeDictionaryKeyCallBacks,
-				&kCFTypeDictionaryValueCallBacks);
-			CFNumberRef mousePageRef = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &mouseUsagePage);
-			CFNumberRef mouseUsageRef = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &mouseUsage);
-			CFDictionarySetValue(mouseMatchDict, CFSTR(kIOHIDDeviceUsagePageKey), mousePageRef);
-			CFDictionarySetValue(mouseMatchDict, CFSTR(kIOHIDDeviceUsageKey), mouseUsageRef);
-			CFRelease(mousePageRef);
-			CFRelease(mouseUsageRef);
-
-			IOHIDManagerSetDeviceMatching(s_mouseHidManager, mouseMatchDict);
-			CFRelease(mouseMatchDict);
-
-			IOHIDManagerRegisterDeviceMatchingCallback(s_mouseHidManager, MouseDeviceMatchedCallback, nullptr);
-			IOHIDManagerRegisterDeviceRemovalCallback(s_mouseHidManager, MouseDeviceRemovedCallback, nullptr);
-			IOHIDManagerRegisterInputValueCallback(s_mouseHidManager, MouseInputValueCallback, nullptr);
-
-			IOHIDManagerScheduleWithRunLoop(s_mouseHidManager, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
-
-			IOReturn mouseOpenResult = IOHIDManagerOpen(s_mouseHidManager, kIOHIDOptionsTypeNone);
-			if (mouseOpenResult != kIOReturnSuccess && mouseOpenResult != kIOReturnExclusiveAccess)
+			s_mouseHidManager = IOHIDManagerCreate(kCFAllocatorDefault, kIOHIDOptionsTypeNone);
+			if (s_mouseHidManager)
 			{
-				if (pWarningStrings)
+				std::int32_t mouseUsagePage = kHIDPage_GenericDesktop;
+				std::int32_t mouseUsage = kHIDUsage_GD_Mouse;
+
+				CFMutableDictionaryRef mouseMatchDict = CFDictionaryCreateMutable(
+					kCFAllocatorDefault, 0,
+					&kCFTypeDictionaryKeyCallBacks,
+					&kCFTypeDictionaryValueCallBacks);
+				CFNumberRef mousePageRef = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &mouseUsagePage);
+				CFNumberRef mouseUsageRef = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &mouseUsage);
+				CFDictionarySetValue(mouseMatchDict, CFSTR(kIOHIDDeviceUsagePageKey), mousePageRef);
+				CFDictionarySetValue(mouseMatchDict, CFSTR(kIOHIDDeviceUsageKey), mouseUsageRef);
+				CFRelease(mousePageRef);
+				CFRelease(mouseUsageRef);
+
+				IOHIDManagerSetDeviceMatching(s_mouseHidManager, mouseMatchDict);
+				CFRelease(mouseMatchDict);
+
+				IOHIDManagerRegisterDeviceMatchingCallback(s_mouseHidManager, MouseDeviceMatchedCallback, nullptr);
+				IOHIDManagerRegisterDeviceRemovalCallback(s_mouseHidManager, MouseDeviceRemovedCallback, nullptr);
+				IOHIDManagerRegisterInputValueCallback(s_mouseHidManager, MouseInputValueCallback, nullptr);
+
+				IOHIDManagerScheduleWithRunLoop(s_mouseHidManager, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
+
+				IOReturn mouseOpenResult = IOHIDManagerOpen(s_mouseHidManager, kIOHIDOptionsTypeNone);
+				if (mouseOpenResult != kIOReturnSuccess && mouseOpenResult != kIOReturnExclusiveAccess)
 				{
-					pWarningStrings->push_back(std::string{ "Mouse IOHIDManagerOpen failed: " } + GetIOReturnErrorString(mouseOpenResult));
+					if (pWarningStrings)
+					{
+						pWarningStrings->push_back(std::string{ "Mouse IOHIDManagerOpen failed: " } + GetIOReturnErrorString(mouseOpenResult));
+					}
+					CFRelease(s_mouseHidManager);
+					s_mouseHidManager = nullptr;
 				}
-				CFRelease(s_mouseHidManager);
-				s_mouseHidManager = nullptr;
-			}
-			else
-			{
-				for (double t = 0.0; t < kDeviceMatchingWaitSec; t += kRunLoopIntervalSec)
+				else
 				{
-					CFRunLoopRunInMode(kCFRunLoopDefaultMode, kRunLoopIntervalSec, true);
+					for (double t = 0.0; t < kDeviceMatchingWaitSec; t += kRunLoopIntervalSec)
+					{
+						CFRunLoopRunInMode(kCFRunLoopDefaultMode, kRunLoopIntervalSec, true);
+					}
+					s_initializedDevices = s_initializedDevices | DeviceFlags::Mouse;
 				}
 			}
 		}
 
 		return true;
+	}
+
+	bool IsInitialized()
+	{
+		return s_initializedDevices != DeviceFlags::None;
+	}
+
+	bool IsInitialized(DeviceFlags deviceFlags)
+	{
+		return (s_initializedDevices & deviceFlags) == deviceFlags;
 	}
 
 	void Terminate()
@@ -389,7 +404,7 @@ namespace ksmaxis
 		}
 		s_joystickDevices.clear();
 		s_mouseDevices.clear();
-		s_initialized = false;
+		s_initializedDevices = DeviceFlags::None;
 	}
 
 	void Update()
@@ -398,7 +413,7 @@ namespace ksmaxis
 		s_deltaSlider = { 0.0, 0.0 };
 		s_deltaMouse = { 0.0, 0.0 };
 
-		if (!s_initialized) return;
+		if (s_initializedDevices == DeviceFlags::None) return;
 
 		CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0, true);
 
