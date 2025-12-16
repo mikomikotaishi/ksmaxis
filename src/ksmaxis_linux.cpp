@@ -17,6 +17,8 @@
 #include <chrono>
 #include <cerrno>
 
+#undef None
+
 namespace ksmaxis
 {
 	namespace
